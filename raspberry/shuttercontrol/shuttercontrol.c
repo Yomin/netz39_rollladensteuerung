@@ -2,11 +2,17 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <linux/un.h>
 
-#include <time.h>
+#include <i2cbridge.h>
 
-#include <wiringPi.h>
-#include <wiringPiI2C.h>
+/**
+  * Socket descriptor for communicating with i2cbridge.
+  */
+int sock;
 
 #define I2C_ADDR_CONTROLLER 0x21
 #define I2C_ADDR_MANUAL     0x22
@@ -24,62 +30,77 @@ long current_millis() {
 ///// I2C stuff /////
 
 /**
-  * This record contains the I2C file descriptors we use in this program
-  */
-struct I2C_descriptors {
-  int controller;
-  int manual;
-} I2C_fd;
-
-#define I2C_FD_CONTROLLER (I2C_fd.controller)
-#define I2C_FD_MANUAL     (I2C_fd.manual)
-
-/**
-  * Initialize an I2C channel to the specified address. Exits with an error
-  * message if the initialization fails,
-  *
-  * @param addr The target address.
-  * @return File Descriptor for the I2C channel
-  */
-int I2C_setup_fd(const int addr) {
-  const int fd = wiringPiI2CSetup(addr);
-  if (!fd) {
-    printf("Error %d on I2C initialization!", errno);
+ * Initialize the unix socket for communication with the i2cbridge daemon.
+ * Exits with an error message if the initialization fails,
+ */
+void i2cbridge_init()
+{
+  struct sockaddr_un addr;
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, I2CBRIDGE_PWD "/" I2CBRIDGE_UNIX, UNIX_PATH_MAX);
+  
+  if((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
+    perror("Failed to open socket");
     exit(-1);
   }
-  return fd;
+  
+  if(connect(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_un)) == -1) {
+    perror("Failed to connect to i2cbridge daemon");
+    exit(-1);
+  }
 }
 
 /**
-  * Initialize all I2C channels and store the file descriptors.
-  */
-void I2C_init(void) {
-  I2C_fd.controller = I2C_setup_fd(I2C_ADDR_CONTROLLER);
-  I2C_fd.manual = I2C_setup_fd(I2C_ADDR_MANUAL);
+ * Send an i2c request to the i2cbridge daemon.
+ *
+ * @param cmd One of the I2CBRIDGE_CMD_* cmds.
+ * @param addr The I2C slave address.
+ * @param reg The I2C slave register address.
+ * @param data The two byte data for sending/receiving.
+ * @return Result of the operation as one of I2CBRIGE_ERROR_*.
+ */
+int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uint8_t *data)
+{
+  struct i2cbridge_request req;
+  struct i2cbridge_response res;
+  
+  req.cmd = cmd;
+  req.addr = addr;
+  req.reg = reg;
+  memcpy(&req.data, data, 2);
+  
+restart:
+  while(send(sock, &req, sizeof(struct i2cbridge_request), 0) == -1) {
+    perror("Failed to send i2c request");
+    i2cbridge_init();
+    sleep(1);
+  }
+  
+  if(recv(sock, &res, sizeof(struct i2cbridge_response), 0) == -1) {
+    perror("Failed to receive i2c response");
+    i2cbridge_init();
+    sleep(1);
+    goto restart;
+  }
+  
+  memcpy(data, &res.data, 2);
+  
+  return res.status;
 }
 
 #define I2C_ERR_INVALIDARGUMENT -2
 
-  union I2C_result {
-    unsigned char c[2];
-    unsigned short r;
-  };
-
-
-int I2C_command(const int fd, const char command, const char data) {
+int I2C_command(const char addr, const char command, const char data) {
   // check parameter range
   if ((command < 0) || (command > 0x07))
     return I2C_ERR_INVALIDARGUMENT;
   if ((data < 0) || (data > 0x0f))
     return I2C_ERR_INVALIDARGUMENT;
   
-  // TODO check fd
-  
-    
   // build the I2C data byte
   // arguments have been checked, 
   // this cannot be negative or more than 8 bits
-  unsigned char send = (command << 4) + data; 
+  unsigned char send = (command << 4) + data;
   
   // calculate the parity
   char v = send;
@@ -91,34 +112,32 @@ int I2C_command(const int fd, const char command, const char data) {
   // set parity bit  
   send += (c << 7);
   
-  union I2C_result result;
-  result.r = 0;
+  unsigned char result[2];
 
   // maximal number of tries
   int hops=20;
 
   // try for hops times until the result is not zero
-  while (!result.c[0] && --hops) {
+  while (--hops) {
     // send command
-    result.r = wiringPiI2CReadReg16(fd, send);
+    if(i2cbridge_send(I2CBRIDGE_CMD_READ16, addr, send, result) != I2CBRIDGE_ERROR_OK)
+      continue;
 
     // check for transmission errors: 2nd byte is inverted 1st byte
-    const unsigned char c = ~result.c[0];
-    if (result.c[1] != c) 
-      // if no match, reset the result
-      result.r = 0;
+    if (result[0] == ~result[1])
+      break;
   }
   
   if (!hops)
     printf("Giving up transmission!\n");
   
-  return result.c[0];
+  return result[0];
 }
 
 ///// I3C stuff /////
 
 void I3C_reset_manual() {
-  I2C_command(I2C_FD_MANUAL, 0x4, 0x0);
+  I2C_command(I2C_ADDR_MANUAL, 0x4, 0x0);
 }
 
 ///// Manual Controll unit /////
@@ -143,7 +162,7 @@ char read_switch_state(const char idx) {
     return SWITCH_ERR_OUTOFBOUNDS;
 
   // send the command    
-  const char state = I2C_command(I2C_FD_MANUAL, 0x3, idx);
+  const char state = I2C_command(I2C_ADDR_MANUAL, 0x3, idx);
   
   // return result
   return state;  
@@ -154,7 +173,7 @@ char read_switch_state(const char idx) {
   * @param The beep pattern. Only the last 4 Bits are evaluated!
   */
 void beep(const char pattern) {
-  I2C_command(I2C_FD_MANUAL, 0x1, pattern&0xf);
+  I2C_command(I2C_ADDR_MANUAL, 0x1, pattern&0xf);
 }
 
 #define LED_PATTERN_OFF  0x00
@@ -167,18 +186,18 @@ void beep(const char pattern) {
   * @param pattern The blink pattern; one of LED_PATTERN_XXX.
   */
 void set_manual_mode_led(const char pattern) {
-  I2C_command(I2C_FD_MANUAL, 0x2, pattern);
+  I2C_command(I2C_ADDR_MANUAL, 0x2, pattern);
 }
 
 char get_manual_mode() {
-  return I2C_command(I2C_FD_MANUAL, 0x5, 0);
+  return I2C_command(I2C_ADDR_MANUAL, 0x5, 0);
 }
 
 #define MANUAL_MODE_ON  1
 #define MANUAL_MODE_OFF 2
 
 void set_manual_mode(const char mode) {
-  I2C_command(I2C_FD_MANUAL, 0x5, mode);
+  I2C_command(I2C_ADDR_MANUAL, 0x5, mode);
 }
 
 ///// Shutter Control unit /////
@@ -210,14 +229,14 @@ char set_shutter_state(const char idx, const char state) {
     case SHUTTER_UP:   command = 0x2; break;
     case SHUTTER_DOWN: command = 0x3; break;
     default: {
-      printf("set_shutter_state: Unknown shutter state: %d.");
+      printf("set_shutter_state: Unknown shutter state: %d.", state);
       printf("This cannot happen!");
       exit(-1);
     }
   }
 
   // send the command    
-  I2C_command(I2C_FD_CONTROLLER, command, idx-1);
+  I2C_command(I2C_ADDR_CONTROLLER, command, idx-1);
 
   // return OK
   return 0;
@@ -227,7 +246,7 @@ char set_shutter_state(const char idx, const char state) {
   * Stop all the shutters!
   */
 void stop_all_shutters() {
-  I2C_command(I2C_FD_CONTROLLER, 0x0, 0x0);
+  I2C_command(I2C_ADDR_CONTROLLER, 0x0, 0x0);
 }
 
 
@@ -317,7 +336,7 @@ void adjust_switch_state(const char idx, const char state) {
 
 
 int main(int argc, char *argv[]) {
-  I2C_init();
+  i2cbridge_init();
   stop_all_shutters();
   clear_stored_switch_state();
   beep(0x05);

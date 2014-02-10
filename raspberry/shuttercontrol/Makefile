@@ -5,8 +5,8 @@ CC      = gcc
 INCLUDE = -I/usr/local/include                                                  
 CFLAGS  = $(DEBUG) -Wall $(INCLUDE) -Winline -pipe                              
                                                                                 
-LDFLAGS = -L/usr/local/lib                                                      
-LDLIBS    = -lwiringPi -lwiringPiDev -lpthread -lm
+LDFLAGS =
+LDLIBS  = -lpthread -lm
 
 
 .phony: clean
@@ -20,5 +20,5 @@ shuttercontrol: shuttercontrol.o
 	@$(CC) -o $@ shuttercontrol.o $(LDFLAGS) $(LDLIBS) 
 
 shuttercontrol.o: shuttercontrol.c
-	@$(CC) -c shuttercontrol.c -o $@
+	@$(CC) -c shuttercontrol.c -o $@ $(CFLAGS)
 

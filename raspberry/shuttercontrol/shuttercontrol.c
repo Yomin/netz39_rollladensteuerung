@@ -44,6 +44,7 @@ void i2cbridge_init()
     exit(-1);
   }
   
+  printf("Connecting to i2cbridge at %s\n", addr.sun_path);
   if(connect(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_un)) == -1) {
     perror("Failed to connect to i2cbridge daemon");
     exit(-1);

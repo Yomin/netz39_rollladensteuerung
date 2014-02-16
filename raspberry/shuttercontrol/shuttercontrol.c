@@ -10,9 +10,10 @@
 #include <i2cbridge.h>
 
 /**
-  * Socket descriptor for communicating with i2cbridge.
+  * Socket descriptor/path for communicating with i2cbridge.
   */
 int sock;
+char *sock_path;
 
 #define I2C_ADDR_CONTROLLER 0x21
 #define I2C_ADDR_MANUAL     0x22
@@ -36,7 +37,7 @@ long current_millis() {
 void i2cbridge_init() {
   struct sockaddr_un addr;
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, I2CBRIDGE_PWD "/" I2CBRIDGE_UNIX, UNIX_PATH_MAX);
+  strncpy(addr.sun_path, sock_path, UNIX_PATH_MAX);
   
   if((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
     perror("Failed to open socket");
@@ -337,6 +338,22 @@ void adjust_switch_state(const char idx, const char state) {
 
 
 int main(int argc, char *argv[]) {
+  int opt;
+  
+  sock_path = I2CBRIDGE_PWD "/" I2CBRIDGE_UNIX;
+  
+  while((opt = getopt(argc, argv, "hu:")) != -1) {
+    switch(opt) {
+      case 'u':
+        sock_path = optarg;
+        break;
+      case 'h':
+      default:
+        printf("Usage: %s [-u socket]\n", argv[0]);
+        return 0;
+    }
+  }
+  
   i2cbridge_init();
   stop_all_shutters();
   clear_stored_switch_state();

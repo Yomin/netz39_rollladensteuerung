@@ -33,8 +33,7 @@ long current_millis() {
  * Initialize the unix socket for communication with the i2cbridge daemon.
  * Exits with an error message if the initialization fails,
  */
-void i2cbridge_init()
-{
+void i2cbridge_init() {
   struct sockaddr_un addr;
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, I2CBRIDGE_PWD "/" I2CBRIDGE_UNIX, UNIX_PATH_MAX);
@@ -60,8 +59,7 @@ void i2cbridge_init()
  * @param data The two byte data for sending/receiving.
  * @return Result of the operation as one of I2CBRIGE_ERROR_*.
  */
-int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uint8_t *data)
-{
+int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uint8_t *data) {
   struct i2cbridge_request req;
   struct i2cbridge_response res;
   
@@ -70,18 +68,20 @@ int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uin
   req.reg = reg;
   memcpy(&req.data, data, 2);
   
-restart:
-  while(send(sock, &req, sizeof(struct i2cbridge_request), 0) == -1) {
-    perror("Failed to send i2c request");
-    i2cbridge_init();
-    sleep(1);
-  }
-  
-  if(recv(sock, &res, sizeof(struct i2cbridge_response), 0) == -1) {
-    perror("Failed to receive i2c response");
-    i2cbridge_init();
-    sleep(1);
-    goto restart;
+  while(1) {
+    while(send(sock, &req, sizeof(struct i2cbridge_request), 0) == -1) {
+      perror("Failed to send i2c request");
+      i2cbridge_init();
+      sleep(1);
+    }
+    
+    if(recv(sock, &res, sizeof(struct i2cbridge_response), 0) == -1) {
+      perror("Failed to receive i2c response");
+      i2cbridge_init();
+      sleep(1);
+    }
+    else
+      break;
   }
   
   memcpy(data, &res.data, 2);

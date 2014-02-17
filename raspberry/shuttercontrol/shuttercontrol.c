@@ -60,14 +60,14 @@ void i2cbridge_init() {
  * @param data The two byte data for sending/receiving.
  * @return Result of the operation as one of I2CBRIGE_ERROR_*.
  */
-int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uint8_t *data) {
+int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uint16_t *data) {
   struct i2cbridge_request req;
   struct i2cbridge_response res;
   
   req.cmd = cmd;
   req.addr = addr;
   req.reg = reg;
-  memcpy(&req.data, data, 2);
+  req.data = *data;
   
   while(1) {
     while(send(sock, &req, sizeof(struct i2cbridge_request), 0) == -1) {
@@ -85,7 +85,7 @@ int i2cbridge_send(const uint8_t cmd, const uint8_t addr, const uint8_t reg, uin
       break;
   }
   
-  memcpy(data, &res.data, 2);
+  *data = res.data;
   
   return res.status;
 }
@@ -114,7 +114,7 @@ int I2C_command(const char addr, const char command, const char data) {
   // set parity bit  
   send += (c << 7);
   
-  unsigned char result[2];
+  uint16_t result = 0;
 
   // maximal number of tries
   int hops=20;
@@ -122,18 +122,18 @@ int I2C_command(const char addr, const char command, const char data) {
   // try for hops times until the result is not zero
   while (--hops) {
     // send command
-    if(i2cbridge_send(I2CBRIDGE_CMD_READ16, addr, send, result) != I2CBRIDGE_ERROR_OK)
+    if(i2cbridge_send(I2CBRIDGE_CMD_READ16, addr, send, &result) != I2CBRIDGE_ERROR_OK)
       continue;
 
     // check for transmission errors: 2nd byte is inverted 1st byte
-    if (result[0] == ~result[1])
+    if((result>>8) == (~result&255))
       break;
   }
   
   if (!hops)
     printf("Giving up transmission!\n");
   
-  return result[0];
+  return result&255;
 }
 
 ///// I3C stuff /////
